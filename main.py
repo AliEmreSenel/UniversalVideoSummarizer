@@ -48,7 +48,7 @@ class VideoDownloadWorker(QThread):
 class AudioASRWorker(QThread):
     error_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal(dict)
+    finished_signal = pyqtSignal(str)
     def __init__(self, filename):
         super().__init__()
         self.filename = filename
@@ -69,7 +69,7 @@ class AudioASRWorker(QThread):
 
         self.progress_signal.emit("Transcription Completed. Time Elapsed: " + str(time.perf_counter() - start_time))
         # Output the results
-        self.finished_signal.emit(outputs)
+        self.finished_signal.emit(outputs["text"])
 
 
 class VideoSummaryApp(QWidget):
@@ -173,7 +173,6 @@ class VideoSummaryApp(QWidget):
         self.asr_worker.start()
 
     def asr_complete(self, text):
-        print(text)
         self.result_text.append(text)
 
 
