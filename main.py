@@ -21,9 +21,33 @@ from pydub import AudioSegment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+def get_all_devices():
+    devices = {}
+    for i in range(torch.cuda.device_count()):
+        device = torch.cuda.get_device_name(i)
+        devices[f"cuda:{i}"] = device
+    if torch.backends.mps.is_available():
+        devices["mps"] = "Apple Neural Engine"
+    devices["cpu"] = "CPU"
+    return devices
+
+available_devices = get_all_devices()
+
+def device_name_to_id(device_name):
+    for i in range(torch.cuda.device_count()):
+        if torch.cuda.get_device_name(i) == device_name:
+            return f"cuda:{i}"
+    if device_name == "Apple Neural Engine":
+        return "mps"
+    if device_name == "CPU":
+        return "cpu"
+    return "cpu"
+
 DEFAULT_CONFIG = {
     "ASR_Model": ("distil-whisper/distil-large-v3", "Model to be used for ASR"),
-    "LLM_Model": ("Qwen/Qwen2.5-0.5B", "Model to be used for summarization"),
+    "LLM_Model": ("Qwen/Qwen2-0.5B", "Model to be used for summarization"),
+    "Device": ("cpu", "Device to run the models on", available_devices),
+    "Fallback_Device": ("cpu", "Device to fall back to if the primary device runs out of memory", available_devices),
 }
 
 def get_config_path():
@@ -123,6 +147,9 @@ class SettingsDialog(QDialog):
                 widget = checkbox
             elif choices:  # Use a dropdown for options with predefined choices
                 combo_box = QComboBox()
+                if "Device" in key:
+                    choices[0] = list(available_devices.values())
+                    value = available_devices.get(value, "Auto")
                 combo_box.addItems(choices[0])  # Add the list of choices
                 combo_box.setCurrentText(value)
                 combo_box.setToolTip(description)  # Tooltip for dropdown
@@ -177,12 +204,9 @@ class SettingsDialog(QDialog):
     def apply_changes(self):
         """Save updated settings back to config."""
         for key in self.fields:
-            if isinstance(self.fields[key], QCheckBox):
-                self.config['Settings'][key] = self.fields[key].isChecked()
-            elif isinstance(self.fields[key], QComboBox):
-                self.config['Settings'][key] = self.fields[key].currentText()
-            else:
-                self.config['Settings'][key] = self.fields[key].text()
+            self.config['Settings'][key] = self.get_field_value(key)
+            if "Device" in key:
+                self.config['Settings'][key] = device_name_to_id(self.config['Settings'][key])
         save_config(self.config)
         self.main_window.config = self.config
         print(self.config['Settings'], self.fields, self.original_values)
@@ -250,10 +274,17 @@ class AudioASRWorker(QThread):
         self.progress_signal.emit(f"Loading ASR Model...")
 
         # Initialize the ASR pipeline
-        pipe = pipeline("automatic-speech-recognition",
-                        model=self.config["Settings"]["ASR_Model"],
-                        device="cuda:0",
-                        torch_dtype=torch.float16)
+        try:
+            pipe = pipeline("automatic-speech-recognition",
+                            model=self.config["Settings"]["ASR_Model"],
+                            device=self.config["Settings"]["Device"],
+                            torch_dtype=torch.float16)
+        except torch.OutOfMemoryError:
+            self.progress_signal.emit(f"Out of memory. Falling back to {available_devices[self.config['Settings']['Fallback_Device']]}")
+            pipe = pipeline("automatic-speech-recognition",
+                            model=self.config["Settings"]["ASR_Model"],
+                            device=self.config["Settings"]["Fallback_Device"],
+                            torch_dtype=torch.float16)
 
         self.progress_signal.emit(f"Model Loaded. Transcribing...")
 
@@ -292,17 +323,14 @@ class LLMWorker(QThread):
             tokenizer = None
             model = None
             try:
-                tokenizer = AutoTokenizer.from_pretrained(model_name, device_map=self.device)
-                model = AutoModelForCausalLM.from_pretrained(model_name, device_map=self.device)
+                tokenizer = AutoTokenizer.from_pretrained(model_name, device_map=self.config["Settings"]["Device"])
+                model = AutoModelForCausalLM.from_pretrained(model_name, device_map=self.config["Settings"]["Device"])
+                self.device = self.config["Settings"]["Device"]
             except torch.OutOfMemoryError:
-                if tokenizer != None:
-                    del tokenizer
-                if model != None:
-                    del model
-                torch.cuda.empty_cache()
-                tokenizer = AutoTokenizer.from_pretrained(model_name, device_map="cpu")
-                model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cpu")
-                self.device = "cpu"
+                self.progress_signal.emit(f"Out of memory. Falling back to {available_devices[self.config['Settings']['Fallback_Device']]}")
+                tokenizer = AutoTokenizer.from_pretrained(model_name, device_map=self.config["Settings"]["Fallback_Device"])
+                model = AutoModelForCausalLM.from_pretrained(model_name, device_map=self.config["Settings"]["Fallback_Device"])
+                self.device = self.config["Settings"]["Fallback_Device"]
 
             # Load the transcript and build the prompt
             if self.summary_type == "Brief Summary":
