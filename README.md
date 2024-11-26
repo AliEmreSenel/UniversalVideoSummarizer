@@ -15,7 +15,7 @@
 
 ### Install Dependencies 
 ```bash
-pip install PyQt5 yt-dlp transformers torch
+pip install -r requirements.txt
 ```
 
 ## Contributions
