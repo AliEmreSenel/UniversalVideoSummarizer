@@ -1,3 +1,6 @@
+import hashlib
+import tempfile
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLineEdit, QLabel, QComboBox, QPushButton, QMessageBox, QTextEdit, QHBoxLayout,
     QFormLayout, QDialog, QDialogButtonBox, QCheckBox
@@ -441,12 +444,25 @@ class VideoSummaryApp(QWidget):
         self.result_text.setText("Initializing download...")
         self.submit_button.setEnabled(False)
 
-        # Start video download
-        self.download_worker = VideoDownloadWorker(url)
-        self.download_worker.progress_signal.connect(self.update_progress)
-        self.download_worker.error_signal.connect(self.handle_error)
-        self.download_worker.finished_signal.connect(self.download_complete)
-        self.download_worker.start()
+        self.url_hash = hashlib.sha512(url.encode()).hexdigest()
+
+        tmpdir = tempfile.gettempdir()
+        if os.path.exists(tmpdir + "/" + self.url_hash):
+            self.result_text.append("Video already transcribed")
+            self.load_transcript(tmpdir + "/" + self.url_hash)
+        else:
+            # Start video download
+            self.download_worker = VideoDownloadWorker(url)
+            self.download_worker.progress_signal.connect(self.update_progress)
+            self.download_worker.error_signal.connect(self.handle_error)
+            self.download_worker.finished_signal.connect(self.download_complete)
+            self.download_worker.start()
+
+    def load_transcript(self, filename):
+        f = open(filename)
+        text = f.read()
+        f.close()
+        self.asr_complete(text)
 
     def do_asr(self, filename):
         self.asr_worker = AudioASRWorker(self.config, filename)
@@ -457,6 +473,11 @@ class VideoSummaryApp(QWidget):
 
     def asr_complete(self, text):
         self.result_text.append("Transcription completed.")
+
+        f = open(tempfile.gettempdir() + "/" + self.url_hash, "w+")
+        f.write(text)
+        f.close()
+
         self.result_text.append("Starting summarization...")
 
         # Start LLMWorker for summarization
