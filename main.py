@@ -242,13 +242,16 @@ class VideoSummaryApp(QWidget):
     def update_progress(self, progress):
         self.result_text.setText(progress)
 
+    def update_progress_append(self, progress):
+        self.result_text.append(progress)
+
     def handle_error(self, error_message):
         QMessageBox.critical(self, "Download Error", error_message)
         self.submit_button.setEnabled(True)
-        self.result_text.setText("Error occurred. Please try again.")
+        self.result_text.append("Error occurred. Please try again.")
 
     def download_complete(self, filename):
-        self.result_text.setText(f"Download complete: {filename}")
+        self.result_text.append(f"Download complete: {filename}")
         self.do_asr(filename)
 
     def handle_summary_request(self):
@@ -273,7 +276,7 @@ class VideoSummaryApp(QWidget):
     def do_asr(self, filename):
         self.asr_worker = AudioASRWorker(filename)
         self.asr_worker.error_signal.connect(self.handle_error)
-        self.asr_worker.progress_signal.connect(self.update_progress)
+        self.asr_worker.progress_signal.connect(self.update_progress_append)
         self.asr_worker.finished_signal.connect(self.asr_complete)
         self.asr_worker.start()
 
@@ -287,7 +290,7 @@ class VideoSummaryApp(QWidget):
 
         self.llm_worker = LLMWorker(text, summary_type, custom_query)
         self.llm_worker.error_signal.connect(self.handle_error)
-        self.llm_worker.progress_signal.connect(self.update_progress)
+        self.llm_worker.progress_signal.connect(self.update_progress_append)
         self.llm_worker.finished_signal.connect(self.llm_complete)
         self.llm_worker.start()
 
