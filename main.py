@@ -282,11 +282,11 @@ class LLMWorker(QThread):
 
             # Load the transcript and build the prompt
             if self.summary_type == "Brief Summary":
-                prompt = f"Provide a brief summary."
+                prompt = f"Provide a brief summary: "
             elif self.summary_type == "Detailed Summary":
-                prompt = f"Provide a detailed summary."
+                prompt = f"Provide a detailed summary: "
             elif self.summary_type == "Key Points Only":
-                prompt = f"Extract only the key points."
+                prompt = f"Extract only the key points: "
             elif self.summary_type == "Custom" and self.custom_query:
                 prompt = f"{self.custom_query}"
             else:
@@ -297,7 +297,7 @@ class LLMWorker(QThread):
                     "role": "system",
                     "content": "You are a helpful summary assistant that processes transcripts.",
                 },
-                {"role": "user", "content": prompt + "\n\nTranscript:" + self.transcript },
+                {"role": "user", "content": prompt + " " + self.transcript },
 
             ]
             self.progress_signal.emit("Generating summary...")
