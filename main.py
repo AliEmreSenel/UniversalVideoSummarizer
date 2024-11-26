@@ -3,7 +3,7 @@ import tempfile
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLineEdit, QLabel, QComboBox, QPushButton, QMessageBox, QTextEdit, QHBoxLayout,
-    QFormLayout, QDialog, QDialogButtonBox, QCheckBox
+    QFormLayout, QDialog, QDialogButtonBox, QCheckBox, QFileDialog, QStyle
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -17,6 +17,7 @@ from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 from configparser import ConfigParser
 from pathlib import Path
 import logging
+from pydub import AudioSegment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -88,6 +89,9 @@ def save_config(config):
 
     with open(config_path, 'w') as configfile:
         new_config.write(configfile)
+
+def is_url(url):
+    return url.startswith("http://") or url.startswith("https://")
 
 class SettingsDialog(QDialog):
     def __init__(self, config, parent=None):
@@ -215,6 +219,23 @@ class VideoDownloadWorker(QThread):
             self.progress_signal.emit(f"Downloading... {progress}")
         elif d['status'] == 'finished':
             self.finished_signal.emit(d['filename'])
+
+class FileToAudioWorker(QThread):
+    error_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal(str)
+
+    def __init__(self, filename):
+        super().__init__()
+        self.filename = filename
+
+    def run(self):
+        try:
+            out_filename = mkstemp("wav")[1] + ".wav"
+            audio = AudioSegment.from_file(self.filename)
+            audio.export(out_filename, format="wav")
+            self.finished_signal.emit(out_filename)
+        except Exception as e:
+            self.error_signal.emit(str(e))
 
 class AudioASRWorker(QThread):
     error_signal = pyqtSignal(str)
@@ -360,6 +381,15 @@ class VideoSummaryApp(QWidget):
         self.url_input.setPlaceholderText("Paste the video URL here...")
         self.query_layout.addWidget(self.url_input)
 
+        self.file_chooser = QFileDialog()
+        self.file_chooser.setFileMode(QFileDialog.AnyFile)
+
+        self.file_select_button = QPushButton("")
+        self.file_select_button.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+        self.file_select_button.clicked.connect(self.open_file_chooser)
+        print(self.file_select_button.size())
+        self.query_layout.addWidget(self.file_select_button)
+
         self.summary_dropdown = QComboBox()
         self.summary_dropdown.addItems([
             "Brief Summary",
@@ -393,6 +423,15 @@ class VideoSummaryApp(QWidget):
         layout.addWidget(self.submit_button)
 
         self.setLayout(layout)
+
+    def open_file_chooser(self):
+        url = self.url_input.text()
+        if url != "":
+            # Check if network url or local path
+            if not is_url(url):
+                self.file_chooser.selectFile(url)
+        if self.file_chooser.exec_():
+            self.url_input.setText(self.file_chooser.selectedFiles()[0])
 
     def summary_type_changed(self):
         if self.summary_dropdown.currentText() == "Custom":
@@ -444,19 +483,28 @@ class VideoSummaryApp(QWidget):
         self.result_text.setText("Initializing download...")
         self.submit_button.setEnabled(False)
 
-        self.url_hash = hashlib.sha512(url.encode()).hexdigest()
+        if is_url(url):
+            self.url_hash = hashlib.sha512(url.encode()).hexdigest()
+        else:
+            self.url_hash = hashlib.sha512(open(url, "rb").read()).hexdigest()
 
         tmpdir = tempfile.gettempdir()
         if os.path.exists(tmpdir + "/" + self.url_hash):
             self.result_text.append("Video already transcribed")
             self.load_transcript(tmpdir + "/" + self.url_hash)
         else:
-            # Start video download
-            self.download_worker = VideoDownloadWorker(url)
-            self.download_worker.progress_signal.connect(self.update_progress)
-            self.download_worker.error_signal.connect(self.handle_error)
-            self.download_worker.finished_signal.connect(self.download_complete)
-            self.download_worker.start()
+            if is_url(url):
+                # Start video download
+                self.download_worker = VideoDownloadWorker(url)
+                self.download_worker.progress_signal.connect(self.update_progress)
+                self.download_worker.error_signal.connect(self.handle_error)
+                self.download_worker.finished_signal.connect(self.download_complete)
+                self.download_worker.start()
+            else:
+                self.file_convert_worker = FileToAudioWorker(url)
+                self.file_convert_worker.error_signal.connect(self.handle_error)
+                self.file_convert_worker.finished_signal.connect(self.do_asr)
+                self.file_convert_worker.start()
 
     def load_transcript(self, filename):
         f = open(filename)
