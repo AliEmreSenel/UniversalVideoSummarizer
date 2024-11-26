@@ -305,20 +305,19 @@ class LLMWorker(QThread):
     progress_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(str)
 
-    def __init__(self, config, transcript, summary_type, custom_query=None, model_name="qwen2.5", device="cuda:0"):
+    def __init__(self, config, transcript, summary_type, custom_query=None):
         super().__init__()
         self.transcript = transcript
         self.summary_type = summary_type
         self.custom_query = custom_query
-        self.model_name = model_name
-        self.device = device
         self.config = config
 
     def run(self):
         try:
-            self.progress_signal.emit(f"Loading {self.model_name} model for summarization...")
 
             model_name = self.config["Settings"]["LLM_Model"]
+
+            self.progress_signal.emit(f"Loading {model_name} model for summarization...")
 
             tokenizer = None
             model = None
