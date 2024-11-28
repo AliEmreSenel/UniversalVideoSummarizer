@@ -1,0 +1,81 @@
+name: Cross-Platform PyInstaller Build
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers when a tag matching this pattern is pushed (e.g., v1.0.0)
+
+jobs:
+  build:
+    name: Build and Bundle Executable
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      # Checkout the code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+
+      # Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # Download FFmpeg
+      - name: Download FFmpeg binary
+        run: |
+          # Create a directory for FFmpeg
+          mkdir -p ffmpeg
+
+          # Download the FFmpeg binary for the specific platform
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
+            tar -xf ffmpeg.tar.xz --strip-components=1 -C ffmpeg
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            curl -L https://evermeet.cx/ffmpeg/ffmpeg -o ffmpeg/ffmpeg
+            chmod +x ffmpeg/ffmpeg
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+            unzip ffmpeg.zip -d ffmpeg
+          fi
+
+      # Bundle application with PyInstaller
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller --onefile --add-binary "ffmpeg/ffmpeg:." main.py
+
+      # Archive the build artifact
+      - name: Archive executable
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ runner.os }}-build
+          path: dist/main  # Adjust according to your script name
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Create a release and attach artifacts
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
