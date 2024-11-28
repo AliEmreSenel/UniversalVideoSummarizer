@@ -3,7 +3,7 @@ name: Cross-Platform PyInstaller Build
 on:
   push:
     tags:
-      - 'v*'  # Triggers when a tag matching this pattern is pushed (e.g., v1.0.0)
+      - 'v*'  # Triggers on tag creation
 
 jobs:
   build:
@@ -14,7 +14,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      # Checkout the code
+      # Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.12
+          python-version: 3.9
 
       # Install dependencies
       - name: Install dependencies
@@ -31,23 +31,26 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Download FFmpeg
-      - name: Download FFmpeg binary
+      # Download FFmpeg based on platform
+      - name: Download FFmpeg (Linux & macOS)
+        if: runner.os != 'Windows'
         run: |
-          # Create a directory for FFmpeg
           mkdir -p ffmpeg
-
-          # Download the FFmpeg binary for the specific platform
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
             tar -xf ffmpeg.tar.xz --strip-components=1 -C ffmpeg
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             curl -L https://evermeet.cx/ffmpeg/ffmpeg -o ffmpeg/ffmpeg
             chmod +x ffmpeg/ffmpeg
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-            unzip ffmpeg.zip -d ffmpeg
           fi
+
+      - name: Download FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir ffmpeg
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          tar -xf ffmpeg.zip -C ffmpeg
+        shell: cmd
 
       # Bundle application with PyInstaller
       - name: Build executable with PyInstaller
@@ -59,7 +62,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: ${{ runner.os }}-build
-          path: dist/main  # Adjust according to your script name
+          path: dist/main  # Adjust this path to your app's output name
 
   release:
     name: Create GitHub Release
@@ -67,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the code
+      # Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
