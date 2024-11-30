@@ -13,11 +13,14 @@ import sys
 import yt_dlp
 import time
 import torch
+from accelerate import dispatch_model
+from torch import cuda, device as torch_device
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 from configparser import ConfigParser
 from pathlib import Path
 import logging
 from pydub import AudioSegment
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -312,24 +315,28 @@ class LLMWorker(QThread):
         self.custom_query = custom_query
         self.config = config
 
+    def _load_model(self, model_name):
+        """
+        Load the tokenizer and model with a fallback to CPU offloading when memory is constrained.
+        """
+        self.progress_signal.emit(f"Loading {model_name} model...")
+        device_map = self.config["Settings"].get("Device", "cuda")
+        fallback_device = self.config["Settings"].get("Fallback_Device", "cpu")
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            max_memory={0: "1GB"},
+            device_map="auto",  # Automatically map layers to GPU/CPU based on memory
+            torch_dtype=torch.float16 if "cuda" in device_map else torch.float32
+        )
+        self.progress_signal.emit(f"{model_name} loaded successfully on {device_map}.")
+        return tokenizer, model
+
     def run(self):
         try:
-
             model_name = self.config["Settings"]["LLM_Model"]
-
-            self.progress_signal.emit(f"Loading {model_name} model for summarization...")
-
-            tokenizer = None
-            model = None
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(model_name, device_map=self.config["Settings"]["Device"])
-                model = AutoModelForCausalLM.from_pretrained(model_name, device_map=self.config["Settings"]["Device"])
-                self.device = self.config["Settings"]["Device"]
-            except torch.OutOfMemoryError:
-                self.progress_signal.emit(f"Out of memory. Falling back to {available_devices[self.config['Settings']['Fallback_Device']]}")
-                tokenizer = AutoTokenizer.from_pretrained(model_name, device_map=self.config["Settings"]["Fallback_Device"])
-                model = AutoModelForCausalLM.from_pretrained(model_name, device_map=self.config["Settings"]["Fallback_Device"])
-                self.device = self.config["Settings"]["Fallback_Device"]
+            tokenizer, model = self._load_model(model_name)
 
             # Load the transcript and build the prompt
             if self.summary_type == "Brief Summary":
@@ -343,27 +350,46 @@ class LLMWorker(QThread):
             else:
                 self.error_signal.emit("Invalid summary type or custom query not provided.")
                 return
+
             messages = [
                 {
                     "role": "system",
                     "content": "You are a helpful summary assistant that processes transcripts.",
                 },
-                {"role": "user", "content": prompt + " " + self.transcript },
-
+                {"role": "user", "content": prompt + " " + self.transcript},
             ]
+
             self.progress_signal.emit("Generating summary...")
 
             start_time = time.perf_counter()
 
-            model_inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(self.device)
+            try:
+                # Tokenize inputs and generate the summary
+                model_inputs = tokenizer.apply_chat_template(
+                    messages, add_generation_prompt=True, return_tensors="pt"
+                ).to(model.device)
+            except ValueError as e:
+                # Chat tamplates not available
+                message = prompt + " " + self.transcript
+                model_inputs = tokenizer(message, return_tensors="pt")["input_ids"].to(model.device)
+
             input_len = model_inputs.shape[1]
-            generated_ids = model.generate(model_inputs, do_sample=True, max_new_tokens=input_len)
-            outputs = tokenizer.batch_decode(generated_ids[:, input_len:], skip_special_tokens=True)
+            generated_ids = model.generate(
+                model_inputs,
+                do_sample=True,
+                max_new_tokens=input_len
+            )
+
+            outputs = tokenizer.batch_decode(
+                generated_ids[:, input_len:], skip_special_tokens=True
+            )
             summary = outputs[0]
 
             elapsed_time = time.perf_counter() - start_time
             self.progress_signal.emit(f"Summary generation completed in {elapsed_time:.2f} seconds.")
             self.finished_signal.emit(summary)
+
+            # Cleanup
             del tokenizer
             del model_inputs
             del generated_ids
