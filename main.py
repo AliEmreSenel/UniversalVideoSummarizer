@@ -277,33 +277,36 @@ class AudioASRWorker(QThread):
         self.filename = filename
 
     def run(self):
-        self.progress_signal.emit(f"Loading ASR Model...")
-
-        # Initialize the ASR pipeline
         try:
-            pipe = pipeline("automatic-speech-recognition",
-                            model=self.config["Settings"]["ASR_Model"],
-                            device=self.config["Settings"]["Device"],
-                            torch_dtype=torch.float16)
-        except torch.OutOfMemoryError:
-            self.progress_signal.emit(f"Out of memory. Falling back to {available_devices[self.config['Settings']['Fallback_Device']]}")
-            pipe = pipeline("automatic-speech-recognition",
-                            model=self.config["Settings"]["ASR_Model"],
-                            device=self.config["Settings"]["Fallback_Device"],
-                            torch_dtype=torch.float16)
+            self.progress_signal.emit(f"Loading ASR Model...")
 
-        self.progress_signal.emit(f"Model Loaded. Transcribing...")
+            # Initialize the ASR pipeline
+            try:
+                pipe = pipeline("automatic-speech-recognition",
+                                model=self.config["Settings"]["ASR_Model"],
+                                device=self.config["Settings"]["Device"],
+                                torch_dtype=torch.float16)
+            except torch.OutOfMemoryError:
+                self.progress_signal.emit(f"Out of memory. Falling back to {available_devices[self.config['Settings']['Fallback_Device']]}")
+                pipe = pipeline("automatic-speech-recognition",
+                                model=self.config["Settings"]["ASR_Model"],
+                                device=self.config["Settings"]["Fallback_Device"],
+                                torch_dtype=torch.float16)
 
-        start_time = time.perf_counter()
-        outputs = pipe(self.filename, chunk_length_s=30, batch_size=1, return_timestamps=False)
+            self.progress_signal.emit(f"Model Loaded. Transcribing...")
 
-        self.progress_signal.emit("Transcription Completed. Time Elapsed: " + str(time.perf_counter() - start_time))
-        # Output the results
-        self.finished_signal.emit(outputs["text"])
+            start_time = time.perf_counter()
+            outputs = pipe(self.filename, chunk_length_s=30, batch_size=1, return_timestamps=False)
 
-        # Cleanup
-        del pipe
-        torch.cuda.empty_cache()
+            self.progress_signal.emit("Transcription Completed. Time Elapsed: " + str(time.perf_counter() - start_time))
+            # Output the results
+            self.finished_signal.emit(outputs["text"])
+
+            # Cleanup
+            del pipe
+            torch.cuda.empty_cache()
+        except Exception as e:
+            self.error_signal.emit(f"Error during transcription: {str(e)}")
 
 
 class LLMWorker(QThread):
@@ -390,7 +393,6 @@ class LLMWorker(QThread):
 
             elapsed_time = time.perf_counter() - start_time
             self.progress_signal.emit(f"Summary generation completed in {elapsed_time:.2f} seconds.")
-            self.finished_signal.emit(summary)
 
             # Cleanup
             del tokenizer
@@ -398,6 +400,7 @@ class LLMWorker(QThread):
             del generated_ids
             del model
             torch.cuda.empty_cache()
+            self.finished_signal.emit(summary)
 
         except Exception as e:
             import traceback
