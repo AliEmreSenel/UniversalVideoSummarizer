@@ -20,7 +20,7 @@ from configparser import ConfigParser
 from pathlib import Path
 import logging
 from pydub import AudioSegment
-
+from yt_dlp.utils import try_call
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -242,8 +242,11 @@ class VideoDownloadWorker(QThread):
 
     def hook(self, d):
         if d['status'] == 'downloading':
-            progress = d.get('_percent_str', '0%').strip()
-            self.progress_signal.emit(f"Downloading... {progress}")
+            progress = try_call(
+                lambda: 100 * d['downloaded_bytes'] / d['total_bytes'],
+                lambda: 100 * d['downloaded_bytes'] / d['total_bytes_estimate'],
+                lambda: d['downloaded_bytes'] == 0 and 0)
+            self.progress_signal.emit(f"Downloading... {progress:.02f}%")
         elif d['status'] == 'finished':
             self.finished_signal.emit(d['filename'])
 
