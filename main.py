@@ -495,6 +495,8 @@ class VideoSummaryApp(QWidget):
     def summary_type_changed(self):
         if self.summary_dropdown.currentText() == "Custom":
             self.summary_query_editor.show()
+        else:
+            self.summary_query_editor.hide()
 
     def handle_summary_request(self):
         url = self.url_input.text()
