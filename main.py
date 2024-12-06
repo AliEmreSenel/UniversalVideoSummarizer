@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLineEdit, QLabel, QComboBox, QPushButton, QMessageBox, QTextEdit, QHBoxLayout,
     QFormLayout, QDialog, QDialogButtonBox, QCheckBox, QFileDialog, QStyle, QTableWidget, QHeaderView, QTableWidgetItem
 )
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QTextCursor
 from PyQt5.QtCore import QThread, pyqtSignal
 from tempfile import mkstemp
 import os
@@ -15,12 +15,13 @@ import time
 import torch
 from accelerate import dispatch_model
 from torch import cuda, device as torch_device
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
 from configparser import ConfigParser
 from pathlib import Path
 import logging
 from pydub import AudioSegment
 from yt_dlp.utils import try_call
+from threading import Thread
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -48,7 +49,7 @@ def device_name_to_id(device_name):
 
 DEFAULT_CONFIG = {
     "ASR_Model": ("distil-whisper/distil-large-v3", "Model to be used for ASR"),
-    "LLM_Model": ("Qwen/Qwen2-0.5B", "Model to be used for summarization"),
+    "LLM_Model": ("Qwen/Qwen2-0.5B", "Model to be used for summarization"), # meta-llama/Llama-3.2-3B-Instruct
     "Device": ("cpu", "Device to run the models on", available_devices),
     "Fallback_Device": ("cpu", "Device to fall back to if the primary device runs out of memory", available_devices),
     "Prompts": ({
@@ -400,6 +401,7 @@ class AudioASRWorker(QThread):
 class LLMWorker(QThread):
     error_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(str)
+    summary_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(str)
 
     def __init__(self, config, transcript, summary_type, custom_query=None):
@@ -464,27 +466,27 @@ class LLMWorker(QThread):
                 model_inputs = tokenizer(message, return_tensors="pt")["input_ids"].to(model.device)
 
             input_len = model_inputs.shape[1]
-            generated_ids = model.generate(
-                model_inputs,
-                do_sample=True,
-                max_new_tokens=input_len
-            )
+            streamer = TextIteratorStreamer(tokenizer, skip_prompt=True)
 
-            outputs = tokenizer.batch_decode(
-                generated_ids[:, input_len:], skip_special_tokens=True
-            )
-            summary = outputs[0]
+            generation_kwargs = {
+                "inputs": model_inputs,
+                "do_sample": True,
+                "streamer": streamer,
+                "max_new_tokens": input_len,
+            }
 
-            elapsed_time = time.perf_counter() - start_time
-            self.progress_signal.emit(f"Summary generation completed in {elapsed_time:.2f} seconds.")
-
+            thread = Thread(target=model.generate, kwargs=generation_kwargs)
+            thread.start()
+            for new_text in streamer:
+                self.summary_signal.emit(new_text)
+            
             # Cleanup
             del tokenizer
             del model_inputs
-            del generated_ids
             del model
             torch.cuda.empty_cache()
-            self.finished_signal.emit(summary)
+            elapsed_time = time.perf_counter() - start_time
+            self.finished_signal.emit(f"Summary generation completed in {elapsed_time:.2f} seconds.")
 
         except Exception as e:
             import traceback
@@ -554,6 +556,11 @@ class VideoSummaryApp(QWidget):
         self.result_text.hide()  # Initially hidden
         layout.addWidget(self.result_text)
 
+        self.summary_text = QTextEdit()
+        self.summary_text.setReadOnly(True)
+        self.summary_text.hide()  # Initially hidden
+        layout.addWidget(self.summary_text)
+
         # Submit Button
         self.submit_button = QPushButton("Generate Summary")
         self.submit_button.setStyleSheet(
@@ -603,6 +610,10 @@ class VideoSummaryApp(QWidget):
 
     def update_progress_append(self, progress):
         self.result_text.append(progress)
+    
+    def update_summary_insert(self, progress):
+        self.summary_text.moveCursor(QTextCursor.End)
+        self.summary_text.insertPlainText(progress)
 
     def handle_error(self, error_message):
         QMessageBox.critical(self, "Download Error", error_message)
@@ -621,6 +632,7 @@ class VideoSummaryApp(QWidget):
             return
 
         self.result_text.show()
+        self.summary_text.show()
         self.result_text.setText("Initializing download...")
         self.submit_button.setEnabled(False)
 
@@ -668,6 +680,7 @@ class VideoSummaryApp(QWidget):
         f.close()
 
         self.result_text.append("Starting summarization...")
+        self.summary_text.clear()
 
         # Start LLMWorker for summarization
         summary_type = self.summary_dropdown.currentText()
@@ -676,6 +689,7 @@ class VideoSummaryApp(QWidget):
         self.llm_worker = LLMWorker(self.config, text, summary_type, custom_query)
         self.llm_worker.error_signal.connect(self.handle_error)
         self.llm_worker.progress_signal.connect(self.update_progress_append)
+        self.llm_worker.summary_signal.connect(self.update_summary_insert)
         self.llm_worker.finished_signal.connect(self.llm_complete)
         self.llm_worker.start()
 
