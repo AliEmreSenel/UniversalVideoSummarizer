@@ -1,12 +1,8 @@
 # Universal Video Summarizer
 
----
-
 **Universal Video Summarizer** is a python based QT5 desktop application that automates summarizing videos. The application utilizes `yt-dlp` to download videos, then ASR to transcribe it and LLMs to summarize/process the transcript according to user directives. 
 
 ## Installation
-
----
 
 ### Prerequisites
 - Python 3.8+
@@ -18,8 +14,6 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-
----
 
 ### Running the Application
 ```bash
@@ -54,14 +48,10 @@ python main.py
 
 ## Features
 
----
-
 - Summarize videos from YouTube, Twitch or any other online platform `yt-dlp` supports and local files.
 - Switch between different models for transcription and summarization.
 - Create custom prompts for the summarization process.
 
 ## Contributions
-
----
 
 Contributions are welcome! Feel free to fork this repository, submit issues, or create pull requests.
