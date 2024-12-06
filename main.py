@@ -3,7 +3,7 @@ import tempfile
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLineEdit, QLabel, QComboBox, QPushButton, QMessageBox, QTextEdit, QHBoxLayout,
-    QFormLayout, QDialog, QDialogButtonBox, QCheckBox, QFileDialog, QStyle
+    QFormLayout, QDialog, QDialogButtonBox, QCheckBox, QFileDialog, QStyle, QTableWidget, QHeaderView, QTableWidgetItem
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -51,6 +51,14 @@ DEFAULT_CONFIG = {
     "LLM_Model": ("Qwen/Qwen2-0.5B", "Model to be used for summarization"),
     "Device": ("cpu", "Device to run the models on", available_devices),
     "Fallback_Device": ("cpu", "Device to fall back to if the primary device runs out of memory", available_devices),
+    "Prompts": ({
+        "Brief Summary": "Provide a brief summary: ",
+        "Detailed Summary": "Provide a detailed summary: ",
+        "Key Points Only": "Extract only the key points: ",
+        },
+        "Prompts for different summary types",
+        "table"
+    )
 }
 
 def get_config_path():
@@ -67,6 +75,12 @@ def get_config_path():
 def validate_config(config):
     is_valid = True
     for key, (default, _description, *choices) in DEFAULT_CONFIG.items():
+        if choices and len(choices) > 0 and choices[0] == "table":
+            if key in config.sections():
+                config[key] = dict(config[key])
+            else:
+                config[key] = default
+            continue
         if key in config['Settings']:
             value = config['Settings'][key]
 
@@ -98,6 +112,10 @@ def load_config():
         save_config(config)
 
     for key, (default, _description, *choices) in DEFAULT_CONFIG.items():
+        if choices and len(choices) > 0 and choices[0] == "table":
+            if key not in config.sections():
+                config[key] = default
+            continue
         if key not in config['Settings']:
             config['Settings'][key] = default
 
@@ -108,7 +126,10 @@ def save_config(config):
     new_config = ConfigParser()
     new_config['Settings'] = {}
 
-    for key, (default, *_rest) in DEFAULT_CONFIG.items():
+    for key, (default, desc, *choices) in DEFAULT_CONFIG.items():
+        if choices and len(choices) > 0 and choices[0] == "table":
+            new_config[key] = config[key]
+            continue
         value = config['Settings'].get(key, default)
 
         if value != default:
@@ -138,7 +159,13 @@ class SettingsDialog(QDialog):
             label = QLabel(key)
             label.setToolTip(description)  # Show description on hover
 
-            value = self.config['Settings'].get(key, default)
+            if choices and len(choices) > 0 and choices[0] == "table":
+                if key in config.sections():
+                    value = dict(config[key])
+                else:
+                    value = default
+            else:
+                value = self.config['Settings'].get(key, default)
             self.original_values[key] = value  # Save original value
 
             if isinstance(default, bool):
@@ -148,7 +175,7 @@ class SettingsDialog(QDialog):
                 checkbox.setToolTip(description)  # Tooltip for checkbox
                 checkbox.stateChanged.connect(self.check_for_changes)
                 widget = checkbox
-            elif choices:  # Use a dropdown for options with predefined choices
+            elif choices and (isinstance(choices[0], tuple) or isinstance(choices[0], list)):  # Use a dropdown for options with predefined choices
                 combo_box = QComboBox()
                 if "Device" in key:
                     choices[0] = list(available_devices.values())
@@ -158,6 +185,35 @@ class SettingsDialog(QDialog):
                 combo_box.setToolTip(description)  # Tooltip for dropdown
                 combo_box.currentTextChanged.connect(self.check_for_changes)
                 widget = combo_box
+            elif choices and choices[0] == "table":  # Use a table for prompts
+                table = QTableWidget()
+                table.setColumnCount(3)
+                table.setHorizontalHeaderLabels(["Summary Type", "Prompt", "Delete"])
+                table.verticalHeader().setVisible(False)
+                table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+                table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+                table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+                for key1, value in value.items():
+                    table.insertRow(table.rowCount())
+                    keyEditor = QLineEdit(key1)
+                    keyEditor.textChanged.connect(self.check_for_changes)
+                    table.setCellWidget(table.rowCount() - 1, 0, keyEditor)
+                    valueEditor = QLineEdit(value)
+                    valueEditor.textChanged.connect(self.check_for_changes)
+                    table.setCellWidget(table.rowCount() - 1, 1, valueEditor)
+                    delete_button = QPushButton("")
+                    delete_button.setIcon(self.style().standardIcon(QStyle.SP_DialogDiscardButton))
+                    delete_button.clicked.connect(lambda x: self.delete_table_item(table, x))
+                    table.setCellWidget(table.rowCount() - 1, 2, delete_button)
+                table.setToolTip(description)
+                table.cellChanged.connect(self.check_for_changes)
+                create_button = QPushButton("Add Prompt")
+                create_button.clicked.connect(lambda: self.extend_table(table))
+                table.insertRow(table.rowCount())
+                table.setCellWidget(table.rowCount() - 1, 0, create_button)
+                table.setSpan(table.rowCount() - 1, 0, 1, 3)
+                widget = table
             else:  # Use a text input for other options
                 line_edit = QLineEdit(value)
                 line_edit.setToolTip(description)  # Tooltip for input
@@ -165,7 +221,11 @@ class SettingsDialog(QDialog):
                 widget = line_edit
 
             self.fields[key] = widget
-            self.form_layout.addRow(label, widget)
+            if choices and choices[0] == "table":
+                self.form_layout.addRow(label)
+                self.form_layout.addRow(widget)
+            else:
+                self.form_layout.addRow(label, widget)
 
         self.layout().addLayout(self.form_layout)
 
@@ -180,10 +240,34 @@ class SettingsDialog(QDialog):
         self.apply_button.clicked.connect(self.apply_changes)
         self.layout().addWidget(self.button_box)
 
+        # Set the dialog size
+        self.resize(400, 300)
+
+    def delete_table_item(self, table, row):
+        print(row)
+        table.removeRow(row)
+        self.check_for_changes()
+
+    def extend_table(self, table):
+        table.insertRow(table.rowCount() - 1)
+        keyEditor = QLineEdit()
+        keyEditor.textChanged.connect(self.check_for_changes)
+        table.setCellWidget(table.rowCount() - 2, 0, keyEditor)
+        valueEditor = QLineEdit()
+        valueEditor.textChanged.connect(self.check_for_changes)
+        table.setCellWidget(table.rowCount() - 2, 1, valueEditor)
+        delete_button = QPushButton("")
+        delete_button.setIcon(self.style().standardIcon(QStyle.SP_DialogDiscardButton))
+        rowId = table.rowCount() - 2
+        delete_button.clicked.connect(lambda: self.delete_table_item(table, rowId))
+        table.setCellWidget(table.rowCount() - 2, 2, delete_button)
+        self.check_for_changes()
+
     def get_field_value(self, key):
         return self.fields[key].isChecked() if isinstance(self.fields[key], QCheckBox) \
             else self.fields[key].currentText() if isinstance(self.fields[key], QComboBox) \
-            else self.fields[key].text()
+            else self.fields[key].text() if isinstance(self.fields[key], QLineEdit) \
+            else {self.fields[key].cellWidget(row, 0).text(): self.fields[key].cellWidget(row, 1).text() for row in range(self.fields[key].rowCount() - 1)}
 
     def check_for_changes(self):
         """Check if any field value has changed from the original."""
@@ -207,12 +291,16 @@ class SettingsDialog(QDialog):
     def apply_changes(self):
         """Save updated settings back to config."""
         for key in self.fields:
-            self.config['Settings'][key] = self.get_field_value(key)
-            if "Device" in key:
-                self.config['Settings'][key] = device_name_to_id(self.config['Settings'][key])
+            value = self.get_field_value(key)
+            if isinstance(value, dict):
+                self.config[key] = value
+            else:
+                self.config['Settings'][key] = self.get_field_value(key)
+                if "Device" in key:
+                    self.config['Settings'][key] = device_name_to_id(self.config['Settings'][key])
         save_config(self.config)
-        self.main_window.config = self.config
-        print(self.config['Settings'], self.fields, self.original_values)
+        self.main_window.update_config(self.config)
+        print(self.config.sections(), self.config, self.config['Settings'], self.fields, self.original_values)
         self.original_values = {key: self.get_field_value(key) for key in self.fields}
         self.check_for_changes()
 
@@ -345,12 +433,8 @@ class LLMWorker(QThread):
             tokenizer, model = self._load_model(model_name)
 
             # Load the transcript and build the prompt
-            if self.summary_type == "Brief Summary":
-                prompt = f"Provide a brief summary: "
-            elif self.summary_type == "Detailed Summary":
-                prompt = f"Provide a detailed summary: "
-            elif self.summary_type == "Key Points Only":
-                prompt = f"Extract only the key points: "
+            if self.summary_type in self.config["Prompts"]:
+                prompt = self.config["Prompts"][self.summary_type]
             elif self.summary_type == "Custom" and self.custom_query:
                 prompt = f"{self.custom_query}"
             else:
@@ -450,12 +534,9 @@ class VideoSummaryApp(QWidget):
         self.query_layout.addWidget(self.file_select_button)
 
         self.summary_dropdown = QComboBox()
-        self.summary_dropdown.addItems([
-            "Brief Summary",
-            "Detailed Summary",
-            "Key Points Only",
-            "Custom"
-        ])
+        keys = list(self.config["Prompts"].keys())
+        keys.extend(["Custom"])
+        self.summary_dropdown.addItems(keys)
         self.summary_dropdown.currentIndexChanged.connect(self.summary_type_changed)
         self.query_layout.addWidget(self.summary_dropdown)
 
@@ -534,7 +615,6 @@ class VideoSummaryApp(QWidget):
 
     def handle_summary_request(self):
         url = self.url_input.text()
-        summary_type = self.summary_dropdown.currentText()
 
         if not url.strip():
             QMessageBox.warning(self, "Input Error", "Please enter a valid video URL.")
@@ -607,9 +687,17 @@ class VideoSummaryApp(QWidget):
     def open_settings(self):
         # Open the settings dialog
         dialog = SettingsDialog(self.config, self)
-        if dialog.exec():
-            # Settings were applied
-            print("Settings updated:", dict(self.config['Settings']))
+        dialog.exec()
+
+    def update_config(self, new_config):
+        self.config = new_config
+
+        # Change the dropdown options
+        self.summary_dropdown.clear()
+        keys = list(self.config["Prompts"].keys())
+        keys.extend(["Custom"])
+        self.summary_dropdown.addItems(keys)
+
 
 
 if __name__ == "__main__":
