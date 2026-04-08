@@ -1,6 +1,6 @@
 yt-dlp
 PyQT5==5.15.11
 pydub==0.25.1
-transformers==4.46.3
-torch==2.5.1
+transformers==5.0.0rc3
+torch==2.8.0
 accelerate>=0.26.0
